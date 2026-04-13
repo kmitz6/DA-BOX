@@ -10,7 +10,7 @@ import glob
 
 REFRESH_PACE = 1
 DASHBOARD_DURATION = 15   # seconds
-GRAPH_DURATION = 45       # seconds
+GRAPH_DURATION = 105       # seconds
 
 # interface discovery
 def pick_interfaces(kind):
@@ -159,7 +159,7 @@ def setup_colors():
     curses.init_pair(5, curses.COLOR_MAGENTA, 0)
 
 # Wi‑Fi signal quality
-def get_wifi_signal_quality(iface: str) -> int | None:
+def git_wifi_quality(iface: str) -> int | None:
     try:
         with open('/proc/net/wireless', 'r') as f:
             lines = f.readlines()
@@ -198,7 +198,7 @@ def get_wifi_signal_quality(iface: str) -> int | None:
 
 
 # Dual graph for Wi‑Fi
-def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
+def draw_single_graph(stdscr, y_start, iface, history, width, max_height):
     """Draw a single small graph at given row, returns next y position."""
     if not history:
         return y_start + max_height + 1
@@ -252,7 +252,7 @@ def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
                 pass
     return y_start + plot_height + 2
 
-def draw_graph(stdscr, duration_seconds):
+def screen_graphs(stdscr, duration_seconds):
     curses.curs_set(0)
     stdscr.nodelay(True)
     setup_colors()
@@ -306,7 +306,7 @@ def draw_graph(stdscr, duration_seconds):
 
         # Update histories
         for iface in wifi_ifaces:
-            quality = get_wifi_signal_quality(iface)
+            quality = git_wifi_quality(iface)
             if quality is not None:
                 histories[iface].append(quality)
                 if len(histories[iface]) > max_history:
@@ -324,7 +324,7 @@ def draw_graph(stdscr, duration_seconds):
             graph_width = w - 6
             if graph_width < 5:
                 graph_width = 5
-            y = draw_small_graph(stdscr, y, iface, histories[iface], graph_width, height_per_graph)
+            y = draw_single_graph(stdscr, y, iface, histories[iface], graph_width, height_per_graph)
 
         # Bottom hint
         try:
@@ -341,7 +341,7 @@ def draw_graph(stdscr, duration_seconds):
                 return
 
 # Dashboard
-def draw_dashboard(stdscr, max_duration=None):
+def screen_summary(stdscr, max_duration=None):
     curses.curs_set(0)
     stdscr.nodelay(True)
     setup_colors()
@@ -478,11 +478,12 @@ def draw_dashboard(stdscr, max_duration=None):
             if ch in (ord('q'), ord('Q')):
                 return
 
-# Main cycler
+# Main cycler - cycles through graph drawing and the summary dashboard
+# there should be a button via GPIO attached for manual switching through
 def run_cycler(stdscr):
     while True:
-        draw_dashboard(stdscr, max_duration=DASHBOARD_DURATION)
-        draw_graph(stdscr, GRAPH_DURATION)
+        screen_summary(stdscr, max_duration=DASHBOARD_DURATION)
+        screen_graphs(stdscr, GRAPH_DURATION)
 
 def main():
     try:
