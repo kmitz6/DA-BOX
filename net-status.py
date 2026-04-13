@@ -8,13 +8,11 @@ import psutil
 import sys
 import glob
 
-REFRESH_SECONDS = 2
+REFRESH_PACE = 1
 DASHBOARD_DURATION = 15   # seconds
 GRAPH_DURATION = 45       # seconds
 
-# ----------------------------------------------------------------------
-# Existing helper functions (unchanged)
-# ----------------------------------------------------------------------
+# interface discovery
 def pick_interfaces(kind):
     ifaces = list(psutil.net_if_addrs().keys())
     kind = kind.lower()
@@ -32,6 +30,7 @@ def pick_interfaces(kind):
                 matches.append(i)
     return matches
 
+# returns ip adress
 def get_ip(iface):
     addrs = psutil.net_if_addrs().get(iface, [])
     for a in addrs:
@@ -39,6 +38,7 @@ def get_ip(iface):
             return a.address
     return None
 
+# returns mac address
 def get_mac(iface):
     addrs = psutil.net_if_addrs().get(iface, [])
     for a in addrs:
@@ -48,10 +48,7 @@ def get_mac(iface):
             return a.address
     return None
 
-def is_up(iface):
-    stats = psutil.net_if_stats().get(iface)
-    return bool(stats.isup) if stats else False
-
+# returns default gateway
 def get_default_gateway():
     try:
         with open('/proc/net/route', 'r') as f:
@@ -66,6 +63,7 @@ def get_default_gateway():
         pass
     return None, None
 
+# get WLAN SSID
 def get_ssid(iface: str) -> str | None:
     try:
         result = subprocess.run(
@@ -91,6 +89,28 @@ def get_ssid(iface: str) -> str | None:
     except Exception:
         return None
 
+# returns interface state
+def is_up(iface):
+    stats = psutil.net_if_stats().get(iface)
+    return bool(stats.isup) if stats else False
+
+# returns active wifi interface
+def get_act_wIf():
+    all_wifi = pick_interfaces("wifi")
+    return [iface for iface in all_wifi if is_up(iface)]
+
+# usb device discovery (verify if adapter has been discovered ok)
+def list_usb_devices():
+    devices = []
+    for path in glob.glob('/sys/bus/usb/devices/*/product'):
+        try:
+            with open(path) as f:
+                devices.append(f.read().strip())
+        except:
+            continue
+    return devices
+
+# name resolution test (static for now)
 def name_resolution() -> tuple[str | None, str | None, str]:
     dns_ip = None
     test_fqdn = "www.gov.pl"
@@ -118,6 +138,7 @@ def name_resolution() -> tuple[str | None, str | None, str]:
 
     return dns_ip, test_ip, test_fqdn
 
+# ping test
 def ping_ok(host):
     if not host:
         return False
@@ -128,15 +149,6 @@ def ping_ok(host):
     except:
         return False
 
-def list_usb_devices():
-    devices = []
-    for path in glob.glob('/sys/bus/usb/devices/*/product'):
-        try:
-            with open(path) as f:
-                devices.append(f.read().strip())
-        except:
-            continue
-    return devices
 
 def setup_colors():
     curses.start_color()
@@ -146,9 +158,7 @@ def setup_colors():
     curses.init_pair(4, curses.COLOR_CYAN, 0)
     curses.init_pair(5, curses.COLOR_MAGENTA, 0)
 
-# ----------------------------------------------------------------------
-# Wi‑Fi signal quality (unchanged)
-# ----------------------------------------------------------------------
+# Wi‑Fi signal quality
 def get_wifi_signal_quality(iface: str) -> int | None:
     try:
         with open('/proc/net/wireless', 'r') as f:
@@ -185,20 +195,14 @@ def get_wifi_signal_quality(iface: str) -> int | None:
         pass
     return None
 
-def get_active_wifi_interfaces():
-    """Return all Wi‑Fi interfaces that are up (even without SSID)."""
-    all_wifi = pick_interfaces("wifi")
-    return [iface for iface in all_wifi if is_up(iface)]
 
-# ----------------------------------------------------------------------
-# Multi‑graph for Wi‑Fi only (stacked vertically)
-# ----------------------------------------------------------------------
+
+# Dual graph for Wi‑Fi
 def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
     """Draw a single small graph at given row, returns next y position."""
     if not history:
         return y_start + max_height + 1
 
-    # Interface name and SSID (if available)
     ssid = get_ssid(iface) or "no SSID"
     try:
         stdscr.addstr(y_start, 1, f"{iface} ({ssid[:12]})", curses.A_BOLD | curses.color_pair(4))
@@ -206,7 +210,8 @@ def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
         pass
     y_start += 1
 
-    plot_height = max_height - 2  # leave one line for percentage
+    # vertical
+    plot_height = max_height - 2
     if plot_height < 1:
         plot_height = 1
 
@@ -247,13 +252,12 @@ def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
                 pass
     return y_start + plot_height + 2
 
-def draw_multi_wifi_graph(stdscr, duration_seconds):
-    """Draw stacked signal graphs for all active Wi‑Fi interfaces."""
+def draw_graph(stdscr, duration_seconds):
     curses.curs_set(0)
     stdscr.nodelay(True)
     setup_colors()
 
-    wifi_ifaces = get_active_wifi_interfaces()
+    wifi_ifaces = get_act_wIf()
     if not wifi_ifaces:
         h, w = stdscr.getmaxyx()
         stdscr.erase()
@@ -336,9 +340,7 @@ def draw_multi_wifi_graph(stdscr, duration_seconds):
             if ch in (ord('q'), ord('Q')):
                 return
 
-# ----------------------------------------------------------------------
-# Dashboard (with countdown)
-# ----------------------------------------------------------------------
+# Dashboard
 def draw_dashboard(stdscr, max_duration=None):
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -355,7 +357,7 @@ def draw_dashboard(stdscr, max_duration=None):
         h, w = stdscr.getmaxyx()
 
         title = "DA BOX by kmitz6"
-        subtitle = f"Refresh every {REFRESH_SECONDS}s"
+        subtitle = f"Refresh every {REFRESH_PACE}s"
         stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
         stdscr.addstr(2, max(0, 1), title)
         stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
@@ -468,7 +470,7 @@ def draw_dashboard(stdscr, max_duration=None):
 
         stdscr.refresh()
 
-        for _ in range(int(REFRESH_SECONDS * 4)):
+        for _ in range(int(REFRESH_PACE * 4)):
             if end_time is not None and time.time() >= end_time:
                 return
             time.sleep(0.25)
@@ -476,13 +478,11 @@ def draw_dashboard(stdscr, max_duration=None):
             if ch in (ord('q'), ord('Q')):
                 return
 
-# ----------------------------------------------------------------------
 # Main cycler
-# ----------------------------------------------------------------------
 def run_cycler(stdscr):
     while True:
         draw_dashboard(stdscr, max_duration=DASHBOARD_DURATION)
-        draw_multi_wifi_graph(stdscr, GRAPH_DURATION)
+        draw_graph(stdscr, GRAPH_DURATION)
 
 def main():
     try:
