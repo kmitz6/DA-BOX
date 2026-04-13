@@ -185,50 +185,37 @@ def get_wifi_signal_quality(iface: str) -> int | None:
         pass
     return None
 
-def get_active_wifi_interface():
-    for iface in pick_interfaces("wifi"):
-        if is_up(iface) and get_ssid(iface):
-            return iface
-    return None
+def get_active_wifi_interfaces():
+    """Return all Wi‑Fi interfaces that are up (even without SSID)."""
+    all_wifi = pick_interfaces("wifi")
+    return [iface for iface in all_wifi if is_up(iface)]
 
 # ----------------------------------------------------------------------
-# NEW: Multi‑graph screen (three graphs stacked vertically)
+# Multi‑graph for Wi‑Fi only (stacked vertically)
 # ----------------------------------------------------------------------
-def get_zigbee_interfaces():
-    """Return list of network interfaces that look like Zigbee/802.15.4."""
-    ifaces = psutil.net_if_addrs().keys()
-    zigbee_names = ["wpan", "zboss", "zigbee", "lowpan", "ieee802154"]
-    matches = []
-    for iface in ifaces:
-        if any(pattern in iface.lower() for pattern in zigbee_names):
-            matches.append(iface)
-    return matches
-
 def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
     """Draw a single small graph at given row, returns next y position."""
     if not history:
         return y_start + max_height + 1
 
-    # Title
+    # Interface name and SSID (if available)
+    ssid = get_ssid(iface) or "no SSID"
     try:
-        stdscr.addstr(y_start, 1, f"{iface}:", curses.A_BOLD | curses.color_pair(4))
+        stdscr.addstr(y_start, 1, f"{iface} ({ssid[:12]})", curses.A_BOLD | curses.color_pair(4))
     except:
         pass
     y_start += 1
 
-    # Plot area
     plot_height = max_height - 2  # leave one line for percentage
     if plot_height < 1:
         plot_height = 1
 
-    # Current quality
     current_q = history[-1]
     try:
         stdscr.addstr(y_start + plot_height, 2, f"{current_q}%", curses.color_pair(1))
     except:
         pass
 
-    # Draw bars
     if len(history) > width:
         plot_data = history[-width:]
     else:
@@ -258,43 +245,38 @@ def draw_small_graph(stdscr, y_start, iface, history, width, max_height):
                 stdscr.addch(axis_y, x, curses.ACS_HLINE)
             except:
                 pass
-    return y_start + plot_height + 2  # next start line
+    return y_start + plot_height + 2
 
-def draw_multi_signal_graph(stdscr, duration_seconds):
-    """Draw three stacked graphs: wlan0, wlan1, zigbee (if present)."""
+def draw_multi_wifi_graph(stdscr, duration_seconds):
+    """Draw stacked signal graphs for all active Wi‑Fi interfaces."""
     curses.curs_set(0)
     stdscr.nodelay(True)
     setup_colors()
 
-    # Determine which interfaces to show
-    wifi_ifaces = pick_interfaces("wifi")
-    # Filter only wlan0, wlan1 style (take first two)
-    wifi_ifaces = [i for i in wifi_ifaces if i.startswith("wlan")][:2]
-    zigbee_ifaces = get_zigbee_interfaces()
-    # If no zigbee, maybe show a placeholder or skip
-    all_ifaces = wifi_ifaces + zigbee_ifaces[:1]  # max 3 graphs
-    if not all_ifaces:
-        # Fallback: show a message
+    wifi_ifaces = get_active_wifi_interfaces()
+    if not wifi_ifaces:
         h, w = stdscr.getmaxyx()
         stdscr.erase()
-        msg = "No suitable interfaces found (wlan0, wlan1, zigbee)"
-        stdscr.addstr(h//2, max(0, (w - len(msg))//2), msg, curses.color_pair(3))
-        stdscr.refresh()
-        time.sleep(2)
+        msg = "No active Wi‑Fi interfaces found"
+        try:
+            stdscr.addstr(h//2, max(0, (w - len(msg))//2), msg, curses.color_pair(3))
+            stdscr.refresh()
+            time.sleep(2)
+        except:
+            pass
         return
 
-    # History storage for each interface
     max_history = 60
-    histories = {iface: [] for iface in all_ifaces}
+    histories = {iface: [] for iface in wifi_ifaces}
     start_time = time.time()
     end_time = start_time + duration_seconds
 
     while time.time() < end_time:
         stdscr.erase()
         h, w = stdscr.getmaxyx()
-        if h < 15:  # minimal height
+        if h < 10:
             try:
-                stdscr.addstr(0, 0, "Screen too short for graphs", curses.color_pair(2))
+                stdscr.addstr(0, 0, "Screen too small", curses.color_pair(2))
                 stdscr.refresh()
                 time.sleep(1)
                 return
@@ -302,7 +284,7 @@ def draw_multi_signal_graph(stdscr, duration_seconds):
                 pass
 
         # Title
-        title = "Signal Quality Graphs"
+        title = "Wi‑Fi Signal Quality"
         try:
             stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
             stdscr.addstr(0, max(0, (w - len(title))//2), title)
@@ -319,23 +301,20 @@ def draw_multi_signal_graph(stdscr, duration_seconds):
             pass
 
         # Update histories
-        for iface in all_ifaces:
-            quality = get_wifi_signal_quality(iface) if "wlan" in iface else None
-            if quality is None and "wpan" in iface:  # try same method for zigbee
-                quality = get_wifi_signal_quality(iface)  # might work
+        for iface in wifi_ifaces:
+            quality = get_wifi_signal_quality(iface)
             if quality is not None:
                 histories[iface].append(quality)
                 if len(histories[iface]) > max_history:
                     histories[iface].pop(0)
 
-        # Calculate available height per graph
-        num_graphs = len(all_ifaces)
-        total_height = h - 5  # leave top/bottom margins
+        # Calculate height per graph
+        num_graphs = len(wifi_ifaces)
+        total_height = h - 4  # leave top/bottom margins
         height_per_graph = max(4, total_height // num_graphs)
 
-        # Draw each graph
         y = 2
-        for iface in all_ifaces:
+        for iface in wifi_ifaces:
             if y >= h - 2:
                 break
             graph_width = w - 6
@@ -351,7 +330,6 @@ def draw_multi_signal_graph(stdscr, duration_seconds):
 
         stdscr.refresh()
 
-        # One second per update
         for _ in range(4):
             time.sleep(0.25)
             ch = stdscr.getch()
@@ -359,7 +337,7 @@ def draw_multi_signal_graph(stdscr, duration_seconds):
                 return
 
 # ----------------------------------------------------------------------
-# draw_dashboard (with countdown, same as your working version)
+# Dashboard (with countdown)
 # ----------------------------------------------------------------------
 def draw_dashboard(stdscr, max_duration=None):
     curses.curs_set(0)
@@ -499,12 +477,12 @@ def draw_dashboard(stdscr, max_duration=None):
                 return
 
 # ----------------------------------------------------------------------
-# Main cycling loop (uses multi‑graph instead of single graph)
+# Main cycler
 # ----------------------------------------------------------------------
 def run_cycler(stdscr):
     while True:
         draw_dashboard(stdscr, max_duration=DASHBOARD_DURATION)
-        draw_multi_signal_graph(stdscr, GRAPH_DURATION)
+        draw_multi_wifi_graph(stdscr, GRAPH_DURATION)
 
 def main():
     try:
