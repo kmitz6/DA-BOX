@@ -13,7 +13,7 @@ DASHBOARD_DURATION = 15   # seconds
 GRAPH_DURATION = 45       # seconds
 
 # ----------------------------------------------------------------------
-# Existing helper functions (unchanged)
+# Helper functions (unchanged from original)
 # ----------------------------------------------------------------------
 def pick_interfaces(kind):
     ifaces = list(psutil.net_if_addrs().keys())
@@ -147,33 +147,23 @@ def setup_colors():
     curses.init_pair(5, curses.COLOR_MAGENTA, 0)
 
 # ----------------------------------------------------------------------
-# New functions for Wi‑Fi signal graphing
+# Wi-Fi signal quality
 # ----------------------------------------------------------------------
 def get_wifi_signal_quality(iface: str) -> int | None:
-    """
-    Returns the link quality as a percentage (0-100) for the given Wi‑Fi interface.
-    Reads from /proc/net/wireless which is present on most Linux systems with Wi‑Fi.
-    Falls back to parsing iwconfig.
-    """
-    # Try /proc/net/wireless first (fast and reliable)
     try:
         with open('/proc/net/wireless', 'r') as f:
             lines = f.readlines()
-        for line in lines[2:]:          # skip header lines
+        for line in lines[2:]:
             parts = line.split()
             if len(parts) >= 4 and parts[0].rstrip(':') == iface:
-                # Link quality is in the third column, format: "XX."
                 quality_str = parts[2].split('.')[0]
                 quality = int(quality_str)
-                # Usually quality is in range 0-70 (or 0-??). Convert to percentage.
-                # Max typical value is 70, but we cap at 100 for safety.
                 max_qual = 70
                 percent = min(100, int(quality * 100 / max_qual))
                 return percent
     except (FileNotFoundError, IndexError, ValueError):
         pass
 
-    # Fallback: parse iwconfig
     try:
         result = subprocess.run(
             ["iwconfig", iface],
@@ -185,9 +175,8 @@ def get_wifi_signal_quality(iface: str) -> int | None:
             return None
         for line in result.stdout.splitlines():
             if "Link Quality=" in line:
-                # Format: "Link Quality=48/70  Signal level=-62 dBm"
                 part = line.split("Link Quality=")[1]
-                qual_str = part.split()[0]   # e.g. "48/70"
+                qual_str = part.split()[0]
                 num, denom = map(int, qual_str.split('/'))
                 if denom > 0:
                     percent = int(num * 100 / denom)
@@ -197,195 +186,70 @@ def get_wifi_signal_quality(iface: str) -> int | None:
     return None
 
 def get_active_wifi_interface():
-    """Returns the first Wi‑Fi interface that is up and has an SSID."""
     for iface in pick_interfaces("wifi"):
         if is_up(iface) and get_ssid(iface):
             return iface
     return None
 
-def draw_signal_graph(stdscr, duration_seconds):
-    """
-    Draws a scrolling graph of Wi‑Fi signal quality for the given duration.
-    Updates once per second. Exits early if 'q' is pressed.
-    """
+# ----------------------------------------------------------------------
+# Dashboard (with countdown and compact layout for small screen)
+# ----------------------------------------------------------------------
+def draw_dashboard(stdscr, max_duration=None):
     curses.curs_set(0)
     stdscr.nodelay(True)
     setup_colors()
 
-    iface = get_active_wifi_interface()
-    if not iface:
-        # No active Wi‑Fi – show a message and wait briefly, then return
-        h, w = stdscr.getmaxyx()
-        stdscr.erase()
-        msg = "No active Wi‑Fi connection found. Cannot display signal graph."
-        stdscr.addstr(h//2, max(0, (w - len(msg))//2), msg, curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr(h//2 + 2, max(0, (w - 20)//2), "Press any key...")
-        stdscr.refresh()
-        stdscr.nodelay(False)
-        stdscr.getch()
-        return
-
-    # Graph settings
-    max_history = 60          # enough for 45 seconds (one sample per second)
-    history = []              # store percentages
     start_time = time.time()
-    end_time = start_time + duration_seconds
-
-    while time.time() < end_time:
-        stdscr.erase()
-        h, w = stdscr.getmaxyx()
-
-        # Title and interface info
-        title = f"Wi‑Fi Signal Power Graph – {iface}"
-        ssid = get_ssid(iface) or "unknown"
-        stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-        stdscr.addstr(1, max(0, (w - len(title))//2), title)
-        stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
-        stdscr.addstr(2, 2, f"SSID: {ssid}", curses.color_pair(5))
-
-        # Get current signal quality
-        quality = get_wifi_signal_quality(iface)
-        if quality is not None:
-            history.append(quality)
-            if len(history) > max_history:
-                history.pop(0)
-
-        # Draw the graph
-        if history:
-            # Determine available height for the graph (leave room for labels)
-            graph_height = min(h - 6, 10)      # at most 10 lines, but adapt to screen
-            graph_width = w - 4                # leave margins
-
-            # Normalise history to fit the graph width
-            if len(history) > graph_width:
-                # Take the most recent values
-                plot_data = history[-graph_width:]
-            else:
-                plot_data = history[:]
-                # Pad left with None to align to right side (latest at right)
-                plot_data = [None] * (graph_width - len(plot_data)) + plot_data
-
-            # For each column, we will draw a vertical bar using block characters.
-            # Map quality (0-100) to height (0 to graph_height)
-            for col in range(graph_width):
-                q = plot_data[col]
-                if q is None:
-                    continue
-                # Height in rows (0 = bottom, graph_height-1 = top)
-                bar_height = int(q * graph_height / 100)
-                if bar_height == 0 and q > 0:
-                    bar_height = 1   # ensure at least one block if quality>0
-
-                # Draw from the bottom up
-                for row in range(bar_height):
-                    y = h - 3 - row   # leave a few lines at bottom for axis labels
-                    x = 2 + col
-                    if 0 <= y < h and 0 <= x < w:
-                        # Use full block or lighter block depending on position
-                        # For simplicity, use a solid block '#'
-                        try:
-                            stdscr.addch(y, x, '#', curses.color_pair(1))
-                        except curses.error:
-                            pass
-
-            # Draw axes and labels
-            # Horizontal axis
-            axis_y = h - 3 - graph_height
-            if axis_y >= 0:
-                for x in range(2, 2 + graph_width):
-                    try:
-                        stdscr.addch(axis_y, x, curses.ACS_HLINE)
-                    except curses.error:
-                        pass
-                # Vertical axis
-                for y in range(axis_y, h - 2):
-                    try:
-                        stdscr.addch(y, 1, curses.ACS_VLINE)
-                    except curses.error:
-                        pass
-                # Corner
-                try:
-                    stdscr.addch(axis_y, 1, curses.ACS_LTEE)
-                except curses.error:
-                    pass
-
-            # Labels: 0%, 50%, 100% on vertical axis
-            if graph_height >= 2:
-                try:
-                    stdscr.addstr(axis_y, 0, "100%", curses.A_BOLD)
-                    mid_y = axis_y + graph_height // 2
-                    stdscr.addstr(mid_y, 0, "50%", curses.A_BOLD)
-                    bot_y = h - 3
-                    stdscr.addstr(bot_y, 0, "0%", curses.A_BOLD)
-                except curses.error:
-                    pass
-
-            # Current numeric value
-            current_q = history[-1] if history else 0
-            stdscr.addstr(h - 2, 2, f"Current signal quality: {current_q}%", curses.color_pair(4))
-
-        else:
-            stdscr.addstr(h//2, max(0, (w - 30)//2), "Waiting for signal data...", curses.color_pair(3))
-
-        # Remaining time
-        remaining = int(end_time - time.time())
-        stdscr.addstr(0, w - 15, f"Time left: {remaining}s", curses.color_pair(5))
-
-        stdscr.refresh()
-
-        # Wait one second, check for quit key
-        for _ in range(4):   # 4 * 0.25 = 1 second, responsive to key presses
-            time.sleep(0.25)
-            ch = stdscr.getch()
-            if ch in (ord('q'), ord('Q')):
-                return
-
-# ----------------------------------------------------------------------
-# dashboard
-# ----------------------------------------------------------------------
-def draw_dashboard(stdscr):
-    curses.curs_set(0)
-    stdscr.nodelay(True)
-    setup_colors()
-
-    # Get screen size
-    h, w = stdscr.getmaxyx()
-    if h < 8 or w < 30:
-        # Screen too small – show a message and wait
-        stdscr.erase()
-        msg = f"Screen too small: {w}x{h} (need at least 30x8)"
-        try:
-            stdscr.addstr(0, 0, msg, curses.color_pair(3))
-            stdscr.refresh()
-            time.sleep(2)
-        except:
-            pass
-        return
+    end_time = start_time + max_duration if max_duration else None
 
     while True:
-        stdscr.erase()
-        h, w = stdscr.getmaxyx()   # re-check each loop (user might resize? unlikely but safe)
+        if end_time and time.time() >= end_time:
+            return
 
-        # ---- Always draw title ----
-        title = "DA BOX (small screen)"
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        if h < 8 or w < 30:
+            # Screen too small – show message and wait
+            try:
+                msg = f"Screen too small: {w}x{h}"
+                stdscr.addstr(0, 0, msg, curses.color_pair(3))
+                stdscr.refresh()
+                time.sleep(2)
+            except:
+                pass
+            return
+
+        # Title and subtitle
+        title = "DA BOX by kmitz6"
+        subtitle = f"Refresh {REFRESH_SECONDS}s"
         try:
             stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
             stdscr.addstr(0, 0, title[:w-1])
             stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(1, 0, subtitle, curses.color_pair(5))
         except:
             pass
 
-        # ---- Networks section (only if enough space) ----
-        y = 2
+        # Countdown (top right)
+        if max_duration:
+            remaining = int(end_time - time.time())
+            countdown_msg = f"Graph in {remaining}s"
+            try:
+                stdscr.addstr(0, max(0, w - len(countdown_msg) - 1), countdown_msg, curses.color_pair(3))
+            except:
+                pass
+
+        y = 3
         sections = [("WiFi", "wifi"), ("Eth", "eth"), ("BT", "bt")]
-        if h > y + 8:
+        if h > y + 6:
             try:
                 stdscr.addstr(y, 0, "Networks:", curses.A_BOLD)
                 y += 1
             except:
                 pass
             for label, kind in sections:
-                if y >= h-2: break
+                if y >= h-3:
+                    break
                 ifaces = pick_interfaces(kind)
                 try:
                     stdscr.addstr(y, 1, f"{label}:", curses.A_BOLD)
@@ -401,7 +265,8 @@ def draw_dashboard(stdscr):
                         y += 1
                     continue
                 for iface in ifaces:
-                    if y >= h-2: break
+                    if y >= h-3:
+                        break
                     up = is_up(iface)
                     ip = get_ip(iface) or '-'
                     color = curses.color_pair(1) if up else curses.color_pair(2)
@@ -415,7 +280,7 @@ def draw_dashboard(stdscr):
                         y += 2
                         break
 
-        # ---- Gateway & ping (only if space) ----
+        # Gateway and ping
         if h > y + 4:
             try:
                 y += 1
@@ -427,7 +292,6 @@ def draw_dashboard(stdscr):
                 else:
                     stdscr.addstr(y, 1, "GW:none")
                 y += 1
-                # ping 8.8.8.8 quick test
                 ok = ping_ok("8.8.8.8")
                 result = "OK" if ok else "FAIL"
                 color = curses.color_pair(1) if ok else curses.color_pair(2)
@@ -436,7 +300,7 @@ def draw_dashboard(stdscr):
             except:
                 pass
 
-        # ---- USB devices (if space) ----
+        # USB devices
         if h > y + 3:
             try:
                 y += 1
@@ -450,7 +314,7 @@ def draw_dashboard(stdscr):
             except:
                 pass
 
-        # ---- Bottom line ----
+        # Quit hint
         try:
             stdscr.addstr(h-1, 0, "q=quit", curses.color_pair(5))
         except:
@@ -458,22 +322,151 @@ def draw_dashboard(stdscr):
 
         stdscr.refresh()
 
-        # Sleep for REFRESH_SECONDS, check for quit
+        # Sleep in small chunks
         for _ in range(int(REFRESH_SECONDS * 4)):
+            if end_time and time.time() >= end_time:
+                return
             time.sleep(0.25)
             ch = stdscr.getch()
             if ch in (ord('q'), ord('Q')):
                 return
 
 # ----------------------------------------------------------------------
-# Main cycling loop
+# Signal graph (with countdown and compact drawing)
+# ----------------------------------------------------------------------
+def draw_signal_graph(stdscr, duration_seconds):
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    setup_colors()
+
+    iface = get_active_wifi_interface()
+    if not iface:
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        msg = "No active Wi-Fi"
+        try:
+            stdscr.addstr(h//2, max(0, (w - len(msg))//2), msg, curses.color_pair(3))
+            stdscr.addstr(h//2+2, max(0, (w-20)//2), "Press any key")
+            stdscr.refresh()
+            stdscr.nodelay(False)
+            stdscr.getch()
+        except:
+            pass
+        return
+
+    max_history = 60
+    history = []
+    start_time = time.time()
+    end_time = start_time + duration_seconds
+
+    while time.time() < end_time:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+
+        # Title and SSID
+        title = f"Wi-Fi Signal - {iface}"
+        ssid = get_ssid(iface) or "unknown"
+        try:
+            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(0, max(0, (w - len(title))//2), title[:w-1])
+            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(1, 0, f"SSID: {ssid[:w-6]}", curses.color_pair(5))
+        except:
+            pass
+
+        # Countdown to dashboard (top right)
+        remaining = int(end_time - time.time())
+        countdown_msg = f"Dashboard in {remaining}s"
+        try:
+            stdscr.addstr(0, max(0, w - len(countdown_msg) - 1), countdown_msg, curses.color_pair(3))
+        except:
+            pass
+
+        # Get quality
+        quality = get_wifi_signal_quality(iface)
+        if quality is not None:
+            history.append(quality)
+            if len(history) > max_history:
+                history.pop(0)
+
+        # Draw graph
+        if history:
+            graph_height = min(h - 5, 8)   # compact height for small screen
+            graph_width = w - 4
+            if len(history) > graph_width:
+                plot_data = history[-graph_width:]
+            else:
+                plot_data = [None] * (graph_width - len(history)) + history
+
+            for col in range(graph_width):
+                q = plot_data[col]
+                if q is None:
+                    continue
+                bar_height = max(1, int(q * graph_height / 100))
+                for row in range(bar_height):
+                    y = h - 4 - row
+                    x = 2 + col
+                    if 0 <= y < h and 0 <= x < w:
+                        try:
+                            stdscr.addch(y, x, '#', curses.color_pair(1))
+                        except:
+                            pass
+
+            # Horizontal axis
+            axis_y = h - 4 - graph_height
+            if axis_y >= 0:
+                for x in range(2, 2 + graph_width):
+                    try:
+                        stdscr.addch(axis_y, x, curses.ACS_HLINE)
+                    except:
+                        pass
+                for y in range(axis_y, h - 3):
+                    try:
+                        stdscr.addch(y, 1, curses.ACS_VLINE)
+                    except:
+                        pass
+                try:
+                    stdscr.addch(axis_y, 1, curses.ACS_LTEE)
+                except:
+                    pass
+
+            # Labels
+            if graph_height >= 2:
+                try:
+                    stdscr.addstr(axis_y, 0, "100%", curses.A_BOLD)
+                    mid_y = axis_y + graph_height // 2
+                    stdscr.addstr(mid_y, 0, "50%", curses.A_BOLD)
+                    bot_y = h - 4
+                    stdscr.addstr(bot_y, 0, "0%", curses.A_BOLD)
+                except:
+                    pass
+
+            current_q = history[-1] if history else 0
+            try:
+                stdscr.addstr(h - 2, 0, f"Signal: {current_q}%", curses.color_pair(4))
+            except:
+                pass
+        else:
+            try:
+                stdscr.addstr(h//2, max(0, (w-20)//2), "Waiting for data...", curses.color_pair(3))
+            except:
+                pass
+
+        stdscr.refresh()
+
+        # One second per sample, responsive to quit
+        for _ in range(4):
+            time.sleep(0.25)
+            ch = stdscr.getch()
+            if ch in (ord('q'), ord('Q')):
+                return
+
+# ----------------------------------------------------------------------
+# Main cycler
 # ----------------------------------------------------------------------
 def run_cycler(stdscr):
-    """Alternate between dashboard and signal graph until 'q' is pressed."""
     while True:
-        # Show dashboard for DASHBOARD_DURATION seconds
         draw_dashboard(stdscr, max_duration=DASHBOARD_DURATION)
-        # Then show signal graph for GRAPH_DURATION seconds
         draw_signal_graph(stdscr, GRAPH_DURATION)
 
 def main():
