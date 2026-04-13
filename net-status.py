@@ -341,138 +341,125 @@ def draw_signal_graph(stdscr, duration_seconds):
                 return
 
 # ----------------------------------------------------------------------
-# Modified dashboard with optional timeout
+# dashboard
 # ----------------------------------------------------------------------
-def draw_dashboard(stdscr, max_duration=None):
-    """
-    Draws the network status dashboard.
-    If max_duration is given (seconds), the function returns after that time.
-    Otherwise it runs forever (until 'q' is pressed).
-    """
+def draw_dashboard(stdscr):
     curses.curs_set(0)
     stdscr.nodelay(True)
     setup_colors()
 
-    start_time = time.time()
-    end_time = start_time + max_duration if max_duration else None
+    # Get screen size
+    h, w = stdscr.getmaxyx()
+    if h < 8 or w < 30:
+        # Screen too small – show a message and wait
+        stdscr.erase()
+        msg = f"Screen too small: {w}x{h} (need at least 30x8)"
+        try:
+            stdscr.addstr(0, 0, msg, curses.color_pair(3))
+            stdscr.refresh()
+            time.sleep(2)
+        except:
+            pass
+        return
 
     while True:
-        # Check timeout
-        if end_time is not None and time.time() >= end_time:
-            return
-
         stdscr.erase()
-        h, w = stdscr.getmaxyx()
+        h, w = stdscr.getmaxyx()   # re-check each loop (user might resize? unlikely but safe)
 
-        title = "DA BOX by kmitz6"
-        subtitle = f"Refresh every {REFRESH_SECONDS}s"
-        stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-        stdscr.addstr(2, max(0, 1), title)
-        stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
-        stdscr.addstr(3, max(0, 1), subtitle, curses.color_pair(5))
+        # ---- Always draw title ----
+        title = "DA BOX (small screen)"
+        try:
+            stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
+            stdscr.addstr(0, 0, title[:w-1])
+            stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+        except:
+            pass
 
-        sections = [("Wi‑Fi", "wifi"), ("Ethernet", "eth"), ("Bluetooth", "bt")]
-        y = 6
-        stdscr.addstr(y, 1, "_________", curses.color_pair(4))
-        y += 1
-        stdscr.addstr(y, 1, "Networks:", curses.A_BOLD | curses.color_pair(4))
-        y += 2
-
-        for label, kind in sections:
-            ifaces = pick_interfaces(kind)
-            stdscr.addstr(y, 2, f"{label}:", curses.A_BOLD | curses.color_pair(4))
-            y += 1
-            if not ifaces:
-                stdscr.addstr(y, 3, "none detected", curses.color_pair(3))
-                y += 2
-                continue
-            for iface in ifaces:
-                up = is_up(iface)
-                ip = get_ip(iface) or '-'
-                mac = get_mac(iface) or '-'
-                color = curses.color_pair(1) if up else curses.color_pair(2)
-
-                ssid = None
-                if kind == "wifi" and up:
-                    ssid = get_ssid(iface)
-
-                stdscr.addstr(y, 3, f"{iface} ", curses.A_BOLD)
-                stdscr.addstr("( UP )" if up else "(DOWN)", color | curses.A_BOLD)
+        # ---- Networks section (only if enough space) ----
+        y = 2
+        sections = [("WiFi", "wifi"), ("Eth", "eth"), ("BT", "bt")]
+        if h > y + 8:
+            try:
+                stdscr.addstr(y, 0, "Networks:", curses.A_BOLD)
                 y += 1
-
-                if ssid:
-                    stdscr.addstr(y, 5, f"SSID: {ssid}")
-                    y += 1
-
-                stdscr.addstr(y, 5, f"IP  : {ip}")
-                y += 1
-                stdscr.addstr(y, 5, f"MAC : {mac}")
-                y += 2
-
-        stdscr.addstr(y, 1, "________________", curses.color_pair(4))
-        y += 1
-        stdscr.addstr(y, 1, "Name resolution:", curses.A_BOLD | curses.color_pair(4))
-        dns_server_ip, dns_result, fqdn_to_test = name_resolution()
-
-        if dns_server_ip:
-            y += 2
-            stdscr.addstr(y, 2, f"Test   : {fqdn_to_test}")
-            y += 1
-            stdscr.addstr(y, 2, f"Server : ")
-            stdscr.addstr(f"{dns_server_ip}", curses.color_pair(1))
-            y += 1
-            dns_result_colour = curses.color_pair(1) if dns_result else curses.color_pair(2) | curses.A_BOLD
-            stdscr.addstr(y, 2, f"Result : ")
-            stdscr.addstr(f"{dns_result}", dns_result_colour)
-        else:
-            stdscr.addstr("no DNS info", curses.color_pair(3) | curses.A_BOLD)
-        y += 2
-
-        stdscr.addstr(y, 1, "_____________", curses.color_pair(4))
-        y += 1
-        stdscr.addstr(y, 1, "Reachability:", curses.A_BOLD | curses.color_pair(4))
-        y += 2
-        gw, gw_iface = get_default_gateway()
-        tests = [("df gateway", gw), ("quad9 dns", "9.9.9.9"), ("myszka.eu", "myszka.eu"),
-                 ("cyfronet.pl", "cyfronet.pl"), ("allegro.pl", "allegro.pl"),
-                 ("facebook.com", "facebook.com"), ("youtube.com", "youtube.com")]
-
-        for name, host in tests:
-            stdscr.addstr(y, 2, f"{name:<13}: ")
-            if not host:
-                stdscr.addstr("no default gateway", curses.color_pair(3) | curses.A_BOLD)
-            else:
+            except:
+                pass
+            for label, kind in sections:
+                if y >= h-2: break
+                ifaces = pick_interfaces(kind)
                 try:
-                    ip_addr = socket.gethostbyname(host)
-                except socket.gaierror:
-                    ip_addr = "‑"
-                ok = ping_ok(host)
-                result_str = "UP  " if ok else "DOWN"
-                colour = curses.color_pair(1) if ok else curses.color_pair(2) | curses.A_BOLD
-                stdscr.addstr(result_str, colour)
-                stdscr.addstr(f" {ip_addr}", curses.color_pair(5))
-            y += 1
+                    stdscr.addstr(y, 1, f"{label}:", curses.A_BOLD)
+                    y += 1
+                except:
+                    y += 1
+                    continue
+                if not ifaces:
+                    try:
+                        stdscr.addstr(y, 2, "none")
+                        y += 1
+                    except:
+                        y += 1
+                    continue
+                for iface in ifaces:
+                    if y >= h-2: break
+                    up = is_up(iface)
+                    ip = get_ip(iface) or '-'
+                    color = curses.color_pair(1) if up else curses.color_pair(2)
+                    try:
+                        stdscr.addstr(y, 2, f"{iface} ")
+                        stdscr.addstr("UP" if up else "DN", color | curses.A_BOLD)
+                        y += 1
+                        stdscr.addstr(y, 3, f"IP:{ip[:12]}")
+                        y += 1
+                    except:
+                        y += 2
+                        break
 
-        y += 1
-        stdscr.addstr(y, 1, "____________", curses.color_pair(4))
-        y += 1
-        stdscr.addstr(y, 1, "USB devices:", curses.A_BOLD | curses.color_pair(4))
-        y += 2
-        usb_devices = list_usb_devices()
-        if usb_devices:
-            for dev in usb_devices:
-                stdscr.addstr(y, 2, dev)
+        # ---- Gateway & ping (only if space) ----
+        if h > y + 4:
+            try:
                 y += 1
-        else:
-            stdscr.addstr(y, 4, "none detected", curses.color_pair(3))
-            y += 1
+                stdscr.addstr(y, 0, "Gateway/Ping:", curses.A_BOLD)
+                y += 1
+                gw, _ = get_default_gateway()
+                if gw:
+                    stdscr.addstr(y, 1, f"GW:{gw[:15]}")
+                else:
+                    stdscr.addstr(y, 1, "GW:none")
+                y += 1
+                # ping 8.8.8.8 quick test
+                ok = ping_ok("8.8.8.8")
+                result = "OK" if ok else "FAIL"
+                color = curses.color_pair(1) if ok else curses.color_pair(2)
+                stdscr.addstr(y, 1, f"Ping 8.8.8.8: {result}", color)
+                y += 1
+            except:
+                pass
+
+        # ---- USB devices (if space) ----
+        if h > y + 3:
+            try:
+                y += 1
+                stdscr.addstr(y, 0, "USB:", curses.A_BOLD)
+                y += 1
+                usb = list_usb_devices()
+                if usb:
+                    stdscr.addstr(y, 1, usb[0][:w-3])
+                else:
+                    stdscr.addstr(y, 1, "none")
+            except:
+                pass
+
+        # ---- Bottom line ----
+        try:
+            stdscr.addstr(h-1, 0, "q=quit", curses.color_pair(5))
+        except:
+            pass
 
         stdscr.refresh()
 
-        # Sleep for REFRESH_SECONDS, but break early if timeout reached
+        # Sleep for REFRESH_SECONDS, check for quit
         for _ in range(int(REFRESH_SECONDS * 4)):
-            if end_time is not None and time.time() >= end_time:
-                return
             time.sleep(0.25)
             ch = stdscr.getch()
             if ch in (ord('q'), ord('Q')):
