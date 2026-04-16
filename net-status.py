@@ -434,8 +434,7 @@ def screen_summary(stdscr, max_duration=None):
         stdscr.addstr(y, 1, "Reachability:", curses.A_BOLD | curses.color_pair(4))
         y += 2
         gw, gw_iface = get_default_gateway()
-        tests = [("df gateway", gw), ("quad9 dns", "9.9.9.9"), ("myszka.eu", "myszka.eu"),
-                 ("cyfronet.pl", "cyfronet.pl"), ("allegro.pl", "allegro.pl"),
+        tests = [("df gateway", gw), [("allegro.pl", "allegro.pl"),
                  ("facebook.com", "facebook.com"), ("youtube.com", "youtube.com")]
 
         for name, host in tests:
